@@ -1,0 +1,7 @@
+{
+  "mode": "operate",
+  "colors": { "background": "#f7f8f3", "panel": "#fffefa", "primary": "#234b3b", "text": "#293c31", "muted": "#637367", "border": "#e0e6dc" },
+  "typography": { "body": "DM Sans", "sectionHeading": "DM Sans", "displayHeading": "Lora" },
+  "spacingBase": 4,
+  "radius": { "panel": 12, "button": 7, "input": 6 }
+}
