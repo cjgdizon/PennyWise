@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.audit/
+output/
+.impeccable/review/

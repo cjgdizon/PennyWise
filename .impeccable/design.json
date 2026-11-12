@@ -1,0 +1,7 @@
+{
+  "mode": "operate",
+  "colors": { "background": "#f9f7f7", "panel": "#ffffff", "tint": "#dbe2ef", "primary": "#3f72af", "navy": "#112d4e", "text": "#112d4e", "muted": "#4e6380", "border": "#dbe2ef" },
+  "typography": { "body": "DM Sans", "sectionHeading": "DM Sans", "displayHeading": "DM Sans" },
+  "spacingBase": 4,
+  "radius": { "panel": 14, "balance": 13, "note": 12, "primaryButton": 8, "input": 6 }
+}

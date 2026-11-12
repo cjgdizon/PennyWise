@@ -1,0 +1,14 @@
+@font-face {
+  font-family: "Penny Sans";
+  src: url("/fonts/dm-sans-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 1000;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Penny Serif";
+  src: url("/fonts/lora-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+}
