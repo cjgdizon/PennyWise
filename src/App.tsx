@@ -1039,7 +1039,7 @@ export default function App() {
           }}
         >
           <span className="brand-mark">
-            <Leaf size={24} strokeWidth={1.7} />
+            <Wallet size={24} strokeWidth={1.7} />
           </span>
           PennyWise<span className="brand-dot">.</span>
         </a>

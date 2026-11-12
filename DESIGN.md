@@ -1,17 +1,27 @@
 # PennyWise design
 
-The app supports quick daily check-ins. Amounts, due dates, and the primary entry action come first. Use the Daily Companion composition approved in the planning discussion.
+The blue Daily Companion uses the user-supplied Color Hunt palette across all screens and install icons.
 
 ## Tokens
 
-- Background `#f7f8f3`. Panels `#fffefa`. Navigation `#fcfdf9`.
-- Forest `#234b3b`. Main text `#293c31`. Secondary text `#637367`.
-- Sage accents `#eaf0e3`. Borders `#e0e6dc`. Warning text `#9b4b31`.
-- Body and section headings use self-hosted DM Sans. Page titles, dialog titles, and empty-state headings use self-hosted Lora.
-- Panel radius is 12px. Buttons use 7px corners. Inputs and selects use 6px corners. Base spacing is 4px.
+- Workspace and phone navigation: #F9F7F7.
+- Balance summary, icons, borders, and selected phone navigation: #DBE2EF.
+- Primary actions, active desktop navigation, and progress: #3F72AF.
+- Desktop rail and main text: #112D4E.
+- Supporting text: #4E6380. Panels: #FFFFFF. Semantic warning colors remain for errors and overdue records.
+- Self-hosted DM Sans is used for titles, sections, controls, and body text. Lora remains registered but is not the active display face.
+- Panels use 14px corners, balance band 13px, notes 12px, primary actions and navigation 8px, and inputs 6px.
 
-## Behavior
+Palette source: https://colorhunt.co/palette/f9f7f7dbe2ef3f72af112d4e. Automated retrieval returned 403; exact hex values come from the supplied URL.
 
-Use a fixed left navigation on desktop and a bottom navigation on phones. Preserve legible currency amounts and visible form errors. Dialogs protect focused financial entry. Empty screens explain the next action without inventing balances.
+## Layout and behavior
 
-The balance band is inherited from the chosen Daily Companion sketch. Other content uses simple rows and separators. Motion is limited to the initial balance reveal and disabled for reduced-motion preferences.
+A fixed navy rail anchors desktop navigation. The summary separates the pale-blue total balance from white income and expense sections. Clear blue actions and larger row labels lead the interface.
+
+Phone navigation stays at the bottom. Summary sections stack, panels become one column, and footer content clears the navigation. Keep keyboard focus, form errors, and reduced-motion behavior.
+
+The design applies to activity, accounts, budgets, bills, settings, dialogs, backup conflicts, and PWA assets. Financial storage and commands retain the reviewed architecture.
+
+## Verification
+
+25 finance tests and 12 production browser scenarios pass. Independent screenshot review approved contrast, amount legibility, phone navigation clearance, and desktop hierarchy. The Impeccable engine failed to download, so no automated detector result is claimed.

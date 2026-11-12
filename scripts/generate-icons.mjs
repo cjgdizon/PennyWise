@@ -35,7 +35,7 @@ for (const [size, filename] of [
         py > 0.28 &&
         py < 0.57 &&
         !(px < 0.58 && py > 0.38 && py < 0.47);
-      const color = stem || bowl ? [224, 237, 191] : [35, 75, 59];
+      const color = stem || bowl ? [249, 247, 247] : [17, 45, 78];
       const offset = y * (size * 3 + 1) + 1 + x * 3;
       data.set(color, offset);
     }
