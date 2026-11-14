@@ -1,50 +1,66 @@
 # PennyWise
 
-PennyWise is a personal finance PWA for Philippine pesos. Track income, expenses, transfers, monthly budgets, and bills. Records stay in your browser. Recording a bill payment creates an expense without sending money to a provider.
+PennyWise is a personal finance PWA with manual transactions, accounts, transfers, category budgets, bills, savings reservations, and filtered reports. Records stay in the current browser. The app has no signup or cloud recovery.
+
+The current hosted origin is [PennyWise](https://pennywise-pi.vercel.app). This repository contains a newer local redesign that has not been deployed to that origin.
 
 ## Run locally
 
-Install Node.js 22.12 or later. In this folder, run:
+Install Node.js 22.12 or later. Run these commands in this folder:
 
-```sh
+~~~sh
 npm ci
 npm run dev
-```
+~~~
 
-Open the address printed by Vite. Add an account and its opening balance to start. The app contains no sample financial records.
+Open the address Vite prints. Add an account and its opening balance to start. No sample financial records are added to the journal.
 
-## Check the app
+## Verify a production build
 
-```sh
+~~~sh
 npm run check
 npm run test:browser
-```
+~~~
 
-The browser check starts a production preview on port 4173 and uses an isolated browser context with synthetic records. On Windows, it uses installed Google Chrome. On other systems, install Chromium with `npx playwright install chromium` first. Evidence is written to `output/playwright`.
+The integrated suite currently passes 45 tests and the production build. The latest browser run passes 15 checks with zero page errors. The scoped screenshot confirmation returned ship: all three findings were resolved.
 
-## Try offline use
+The browser check starts a production preview on port 4173 and uses isolated contexts with synthetic records. On Windows it uses installed Google Chrome. On other systems, install Chromium with npx playwright install chromium first. Evidence is written to output/playwright.
 
-```sh
+## Use PennyWise offline
+
+~~~sh
 npm run build
 npm run preview -- --port 4173
-```
+~~~
 
-Open the production preview online once. In Settings, wait for the offline-ready message before disconnecting. Offline caching is enabled in production builds. Use your browser's installation action when supported.
+Open the production preview online once and wait for its offline-ready status before disconnecting. Installation depends on the browser. Use Install or Add to Home Screen when available. Production hosting requires a stable HTTPS origin at the root path. Changing the origin creates a separate browser database.
 
-## Keep backups
+## Understand the money records
 
-Export a backup from Settings and keep it somewhere private. Backup files contain readable financial records. Imports combine records after a preview and conflict choices. Missing records never delete existing records. An older backup can bring back previously deleted records.
+Amounts use integer minor units. Each ledger uses either PHP or USD. Changing denomination is blocked while monetary records exist, and no currency conversion takes place. Existing ledgers remain PHP.
 
-If another tab changes your records after an import preview, choose the file again to build a fresh preview. A failed import leaves the current records intact.
+Recording a bill payment creates an expense; it does not pay the provider. Savings contributions reserve existing funds without creating income, expenses, or transfers. Release reserved funds before deleting a funded goal.
 
-## Release constraints
+Safe-to-spend is a current-month planning estimate. It takes the lower of remaining budget and cash after unpaid bills and savings reservations, with a floor of zero. It includes overdue bills and excludes future-dated transactions. With no budgets, it is not calculated.
 
-Deploy `dist` to a stable HTTPS origin at its root path. A different origin has a separate browser database. Choose that address before entering real records. This repository does not include a hosted release, cloud recovery, bank connections, or background notifications.
+Reports export the records matching their filters. The PDF action opens a printable report and the browser print dialog; choose Save as PDF there.
 
-The database starts at schema version 1. Future upgrades require explicit transactional migrations and migration tests. Do not delete the database as an upgrade fallback.
+## Keep and combine backups
 
-## Architecture
+Export a backup from Settings and keep it private. Backups contain readable financial records. Imports combine records after a preview and explicit conflict choices. Missing records never delete current records. An old backup can restore previously deleted records.
 
-Read [the implementation contract](docs/implementation.md). Financial commands and validation live in `src/finance`. React screens consume committed snapshots. The service worker caches app files, not financial records.
+Version-two backups include goals, contribution history, preferences, and budget alert thresholds. Version-one PHP backups remain readable and do not reset newer local settings or remove newer records. Backups with another denomination cannot silently relabel existing money.
 
-DM Sans and Lora are self-hosted under the SIL Open Font License. Their license files are in `public/fonts`. Interface icons come from Lucide.
+If another tab changes records after the preview, choose the file again. A failed import leaves current records intact.
+
+## Upgrade safely
+
+Export a backup before opening the redesigned app for the first time. Close old PennyWise tabs and update the app before continuing. Schema version 2 migrates version-one records transactionally, preserves identifiers, adds an 80% budget threshold, and creates default preferences.
+
+Current clients close on external schema upgrades and reject unsupported newer schemas. Already-installed version-one bundles cannot retroactively receive that guard. A failed upgrade must not be fixed by clearing browser storage.
+
+## Architecture and limits
+
+Read [the implementation reference](docs/implementation.md) for data ownership, financial definitions, and verification scope. React components use Tailwind. Analytics and report exports are separate from financial commands. Dexie owns the local database, and the service worker caches app files rather than financial records.
+
+Inter and JetBrains Mono are self-hosted through Fontsource packages. Lucide supplies interface icons. No backend, authentication, Next.js migration, bank connection, or push notification service is included. Physical phone installation and Safari remain unverified.

@@ -4,16 +4,22 @@ import type {
   Bill,
   Budget,
   Category,
+  CompleteSnapshot,
   Collection,
+  Contribution,
+  Currency,
   Conflict,
   ConflictChoices,
   ImportPreview,
+  Goal,
+  Preferences,
   Snapshot,
   Transaction,
   TransactionInput,
 } from "./types";
 import {
   balanceFor,
+  defaultPreferences,
   isScheduled,
   money,
   occurrences,
@@ -33,16 +39,18 @@ import {
   collections,
   compatible,
   equalRecords,
+  hasMonetaryRecords,
   parseBackup,
   parseRecord,
   parseSnapshot,
+  recordRows,
   uniqueKey,
   validateSnapshot,
   type FinancialRecord,
 } from "./validation";
 
 export type * from "./types";
-export { balanceFor, money, occurrences, parseMoney, safeTotal, today };
+export { balanceFor, defaultPreferences, money, occurrences, parseMoney, safeTotal, today };
 
 type Input<T extends { id: string }> = Omit<T, "id"> & { id?: string };
 const defaultCategories: Category[] = [
@@ -106,7 +114,7 @@ function identified<T extends { id?: string }>(input: T): T & { id: string } {
   return { ...input, id: input.id ?? crypto.randomUUID() };
 }
 
-async function mutate<T>(change: (snapshot: Snapshot) => T): Promise<T> {
+async function mutate<T>(change: (snapshot: CompleteSnapshot) => T): Promise<T> {
   return database.transaction("rw", allTables, async () => {
     const before = await readSnapshot();
     const after = structuredClone(before);
@@ -174,10 +182,10 @@ function checkImportIdentity(current: Snapshot, incoming: Snapshot): void {
     { collection: Collection; row: FinancialRecord }
   >();
   for (const collection of collections)
-    for (const row of current[collection])
+    for (const row of recordRows(current, collection))
       allCurrent.set(row.id, { collection, row });
   for (const collection of collections)
-    for (const row of incoming[collection]) {
+    for (const row of recordRows(incoming, collection)) {
       const existing = allCurrent.get(row.id);
       if (
         existing &&
@@ -217,14 +225,20 @@ function collisions(
   );
 }
 
-function buildPreview(current: Snapshot, incoming: Snapshot): ImportPreview {
+function buildPreview(current: Snapshot, incoming: Snapshot, version: 1 | 2, currency: Currency): ImportPreview {
+  if (hasMonetaryRecords(current) && hasMonetaryRecords(incoming) && (current.preferences?.[0]?.currency ?? "PHP") !== currency) {
+    throw new Error("This backup uses a different currency. Existing monetary records cannot be converted or relabeled.");
+  }
+  if (version === 1 && hasMonetaryRecords(incoming) && (current.preferences?.[0]?.currency ?? "PHP") !== "PHP") {
+    throw new Error("Version-one backups use PHP. Choose PHP before importing into an empty ledger.");
+  }
   checkImportIdentity(current, incoming);
   const conflicts: Conflict[] = [];
   let added = 0;
   let skipped = 0;
   for (const collection of collections)
-    for (const row of incoming[collection]) {
-      const matches = collisions(collection, row, current[collection]);
+    for (const row of recordRows(incoming, collection)) {
+      const matches = collisions(collection, row, recordRows(current, collection));
       if (!matches.length) added++;
       else if (matches.length === 1 && equalRecords(matches[0], row)) skipped++;
       else
@@ -236,7 +250,7 @@ function buildPreview(current: Snapshot, incoming: Snapshot): ImportPreview {
             incoming: row,
           });
     }
-  return { revision: current.revision, incoming, conflicts, added, skipped };
+  return { revision: current.revision, incoming, conflicts, added, skipped, version, currency };
 }
 
 function resolveImport(
@@ -252,8 +266,8 @@ function resolveImport(
     const removedIds = new Set<string>();
     const keptIds = new Set<string>();
     const accepted: FinancialRecord[] = [];
-    for (const row of preview.incoming[collection]) {
-      const matches = collisions(collection, row, current[collection]);
+    for (const row of recordRows(preview.incoming, collection)) {
+      const matches = collisions(collection, row, recordRows(current, collection));
       if (matches.length === 1 && equalRecords(matches[0], row)) {
         keptIds.add(matches[0].id);
         skipped++;
@@ -290,11 +304,19 @@ function resolveImport(
         "Overlapping conflict choices would replace a record you chose to keep. Resolve those conflicts consistently.",
       );
     (snapshot[collection] as FinancialRecord[]) = [
-      ...(current[collection] as FinancialRecord[]).filter(
+      ...recordRows(current, collection).filter(
         (existing) => !removedIds.has(existing.id),
       ),
       ...accepted,
     ];
+  }
+  const currentCurrency = current.preferences?.[0]?.currency ?? "PHP";
+  const resultingCurrency = snapshot.preferences?.[0]?.currency ?? currentCurrency;
+  if (resultingCurrency !== currentCurrency && hasMonetaryRecords(current)) {
+    throw new Error("Release or remove monetary records before changing the ledger currency. No conversion is performed.");
+  }
+  if (hasMonetaryRecords(preview.incoming) && resultingCurrency !== preview.currency) {
+    throw new Error("The chosen preferences do not match this backup's currency. No conversion is performed.");
   }
   for (const original of current.bills) {
     const incoming = snapshot.bills.find((bill) => bill.id === original.id);
@@ -309,6 +331,7 @@ export const finance = {
     await mutate((snapshot) => {
       if (snapshot.categories.length === 0)
         snapshot.categories = structuredClone(defaultCategories);
+      if (snapshot.preferences.length === 0) snapshot.preferences = [{ ...defaultPreferences }];
     });
   },
 
@@ -398,6 +421,46 @@ export const finance = {
     });
   },
 
+  async saveGoal(input: Input<Goal>): Promise<Goal> {
+    const goal = parseRecord("goals", identified(input)) as Goal;
+    return mutate(snapshot => { put(snapshot.goals, goal); return goal; });
+  },
+
+  async deleteGoal(goalId: string): Promise<void> {
+    await mutate(snapshot => {
+      if (!snapshot.goals.some(goal => goal.id === goalId)) throw new Error("Savings goal not found.");
+      const history = snapshot.contributions.filter(row => row.goalId === goalId);
+      if (safeTotal(history.map(row => row.amount)) !== 0) throw new Error("Release this goal's reserved funds before deleting it.");
+      snapshot.goals = snapshot.goals.filter(goal => goal.id !== goalId);
+      snapshot.contributions = snapshot.contributions.filter(row => row.goalId !== goalId);
+    });
+  },
+
+  async contribute(input: { goalId: string; amount: number; date: string }): Promise<Contribution> {
+    const contribution = parseRecord("contributions", { ...input, id: crypto.randomUUID() }) as Contribution;
+    return mutate(snapshot => {
+      if (!snapshot.goals.some(goal => goal.id === contribution.goalId)) throw new Error("Savings goal not found.");
+      if (contribution.amount > 0) {
+        const currentTransactions = snapshot.transactions.filter(row => row.date <= today());
+        const cash = safeTotal(snapshot.accounts.map(account => balanceFor(account, currentTransactions)));
+        const reserved = safeTotal(snapshot.contributions.filter(row => row.date <= today()).map(row => row.amount));
+        if (BigInt(contribution.amount) > BigInt(cash) - BigInt(reserved)) throw new Error("There are not enough unreserved funds for this contribution.");
+      }
+      snapshot.contributions.push(contribution);
+      return contribution;
+    });
+  },
+
+  async savePreferences(input: Input<Preferences>): Promise<Preferences> {
+    const preferences = parseRecord("preferences", { ...input, id: input.id ?? "preferences" }) as Preferences;
+    return mutate(snapshot => {
+      const previous = snapshot.preferences[0] ?? defaultPreferences;
+      if (preferences.currency !== previous.currency && hasMonetaryRecords(snapshot)) throw new Error("Currency cannot change while monetary records exist. Existing amounts are not converted.");
+      snapshot.preferences = [preferences];
+      return preferences;
+    });
+  },
+
   async archiveAccount(accountId: string): Promise<void> {
     await mutate((snapshot) => {
       const account = snapshot.accounts.find(
@@ -484,8 +547,8 @@ export const finance = {
     return JSON.stringify(
       {
         app: "PennyWise",
-        version: 1,
-        currency: "PHP",
+        version: 2,
+        currency: snapshot.preferences[0]?.currency ?? "PHP",
         exportedAt: new Date().toISOString(),
         data: snapshot,
       },
@@ -496,21 +559,23 @@ export const finance = {
 
   async previewImport(text: string): Promise<ImportPreview> {
     const incoming = parseBackup(text);
-    return buildPreview(await consistentSnapshot(), incoming);
+    return buildPreview(await consistentSnapshot(), incoming.snapshot, incoming.version, incoming.currency);
   },
 
   async commitImport(
     preview: ImportPreview,
     choices: ConflictChoices,
   ): Promise<{ added: number; skipped: number; replaced: number }> {
-    const incoming = parseSnapshot(preview.incoming);
+    if (preview.version !== 1 && preview.version !== 2) throw new Error("Preview the backup again before importing.");
+    if (preview.currency !== "PHP" && preview.currency !== "USD") throw new Error("Backup currency is invalid.");
+    const incoming = parseSnapshot(preview.incoming, preview.version === 1);
     return database.transaction("rw", allTables, async () => {
       const current = await readSnapshot();
       if (current.revision !== preview.revision)
         throw new Error(
           "Your records changed after this preview. Preview the backup again before importing.",
         );
-      const currentPreview = buildPreview(current, incoming);
+      const currentPreview = buildPreview(current, incoming, preview.version!, preview.currency!);
       const result = resolveImport(current, currentPreview, choices);
       await persistSnapshot(current, result.snapshot);
       return {
@@ -522,6 +587,6 @@ export const finance = {
   },
 };
 
-export function useFinanceSnapshot(): Snapshot | undefined {
+export function useFinanceSnapshot(): CompleteSnapshot | undefined {
   return useLiveQuery(() => consistentSnapshot(), []);
 }

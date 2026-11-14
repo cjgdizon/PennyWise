@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { balanceFor, finance, money, occurrences, parseMoney } from "./index";
+import { balanceFor, finance, money, occurrences, parseMoney, today, defaultPreferences } from "./index";
 import { allTables, database } from "./storage";
 import type {
   Account,
@@ -326,11 +326,11 @@ describe("backup combining", () => {
     const preview = await finance.previewImport(text);
     expect(preview.conflicts).toEqual([]);
     expect(preview.added).toBe(0);
-    expect(preview.skipped).toBe(11);
+    expect(preview.skipped).toBe(12);
     const before = await finance.getSnapshot();
     expect(await finance.commitImport(preview, {})).toEqual({
       added: 0,
-      skipped: 11,
+      skipped: 12,
       replaced: 0,
     });
     expect(await finance.getSnapshot()).toEqual(before);
@@ -524,7 +524,7 @@ describe("backup combining", () => {
       finance.previewImport(
         JSON.stringify({
           app: "PennyWise",
-          version: 2,
+          version: 3,
           currency: "PHP",
           data: before,
         }),
@@ -585,6 +585,162 @@ describe("backup combining", () => {
     } finally {
       database.table("transactions").hook("creating").unsubscribe(failWrite);
     }
+    expect(await finance.getSnapshot()).toEqual(before);
+  });
+});
+
+describe("savings reservations and preferences", () => {
+  it("reserves and releases money without creating transactions or moving account balances", async () => {
+    await account("cash", 100_000);
+    const goal = await finance.saveGoal({ name: "Emergency fund", target: 200_000 });
+    await finance.contribute({ goalId: goal.id, amount: 30_000, date: today() });
+    await finance.contribute({ goalId: goal.id, amount: -10_000, date: today() });
+    const snapshot = await finance.getSnapshot();
+    expect(snapshot.contributions.map(row => row.amount).sort((a, b) => a - b)).toEqual([-10_000, 30_000]);
+    expect(snapshot.transactions).toEqual([]);
+    expect(balanceFor(snapshot.accounts[0], snapshot.transactions)).toBe(100_000);
+    await expect(finance.deleteGoal(goal.id)).rejects.toThrow("Release");
+    await finance.contribute({ goalId: goal.id, amount: -20_000, date: today() });
+    await finance.deleteGoal(goal.id);
+    expect((await finance.getSnapshot()).goals).toEqual([]);
+    expect((await finance.getSnapshot()).contributions).toEqual([]);
+  });
+
+  it("rejects deposits beyond unreserved current funds and ignores future income", async () => {
+    await account("cash", 10_000);
+    await finance.saveTransaction({ kind: "income", accountId: "cash", categoryId: "00000000-0000-4000-8000-000000000007", amount: 200_000, date: "9999-01-01", note: "Future pay" });
+    const first = await finance.saveGoal({ name: "First", target: 50_000 });
+    const second = await finance.saveGoal({ name: "Second", target: 50_000 });
+    await finance.contribute({ goalId: first.id, amount: 8_000, date: today() });
+    const before = await finance.getSnapshot();
+    await expect(finance.contribute({ goalId: second.id, amount: 2_001, date: today() })).rejects.toThrow("unreserved");
+    await expect(finance.contribute({ goalId: first.id, amount: -8_001, date: today() })).rejects.toThrow("releases");
+    await expect(finance.contribute({ goalId: first.id, amount: 0, date: today() })).rejects.toThrow("nonzero");
+    await expect(finance.contribute({ goalId: first.id, amount: 1, date: "9999-01-01" })).rejects.toThrow("future");
+    expect(await finance.getSnapshot()).toEqual(before);
+  });
+
+  it("permits later expenses to underfund reservations without changing savings history", async () => {
+    await account("cash", 100_000);
+    const goal = await finance.saveGoal({ name: "Rainy day", target: 100_000 });
+    await finance.contribute({ goalId: goal.id, amount: 80_000, date: today() });
+    await expense(50_000);
+    const snapshot = await finance.getSnapshot();
+    expect(snapshot.contributions[0].amount).toBe(80_000);
+    expect(balanceFor(snapshot.accounts[0], snapshot.transactions)).toBe(50_000);
+  });
+
+  it("serializes simultaneous deposits so separate goals cannot reserve the same funds", async () => {
+    await account("cash", 10_000);
+    const a = await finance.saveGoal({ name: "A", target: 10_000 });
+    const b = await finance.saveGoal({ name: "B", target: 10_000 });
+    const results = await Promise.allSettled([finance.contribute({ goalId: a.id, amount: 8_000, date: today() }), finance.contribute({ goalId: b.id, amount: 8_000, date: today() })]);
+    expect(results.filter(row => row.status === "fulfilled")).toHaveLength(1);
+    expect((await finance.getSnapshot()).contributions).toHaveLength(1);
+  });
+
+  it("saves a local profile and USD before money exists, then prevents relabeling existing money", async () => {
+    await finance.savePreferences({ ...defaultPreferences, name: "CJ", currency: "USD", theme: "dark", alerts: false });
+    await account();
+    await expect(finance.savePreferences({ ...defaultPreferences })).rejects.toThrow("Currency cannot change");
+    await finance.savePreferences({ ...defaultPreferences, currency: "USD", theme: "light", name: "CJ" });
+    expect((await finance.getSnapshot()).preferences).toEqual([{ ...defaultPreferences, currency: "USD", theme: "light", name: "CJ" }]);
+    expect(money(12950, "USD")).toContain("129.50");
+    expect(money(12950, "USD")).not.toContain("₱");
+  });
+
+  it("defaults budget thresholds and rejects out-of-range or fractional thresholds", async () => {
+    const budget = await finance.saveBudget({ month: "2026-11", categoryId: "00000000-0000-4000-8000-000000000001", amount: 10_000 });
+    expect(budget.alertThreshold).toBe(80);
+    await finance.saveBudget({ ...budget, alertThreshold: 95 });
+    for (const alertThreshold of [0, 100, 80.5, NaN]) await expect(finance.saveBudget({ ...budget, alertThreshold })).rejects.toThrow("threshold");
+    expect((await finance.getSnapshot()).budgets[0].alertThreshold).toBe(95);
+  });
+});
+
+describe("version-two backup extensions", () => {
+  it("preserves goals, contributions, and preferences when combining a v1 backup", async () => {
+    await account();
+    const old = backup(await finance.getSnapshot());
+    const goal = await finance.saveGoal({ name: "Emergency", target: 30_000 });
+    await finance.contribute({ goalId: goal.id, amount: 10_000, date: today() });
+    await finance.savePreferences({ ...defaultPreferences, name: "Local profile", theme: "dark", alerts: false });
+    const before = await finance.getSnapshot();
+    const preview = await finance.previewImport(old);
+    expect(preview.version).toBe(1);
+    await finance.commitImport(preview, {});
+    expect(await finance.getSnapshot()).toEqual(before);
+  });
+
+  it("round-trips all extension records and requires explicit preferences conflicts", async () => {
+    await account();
+    const goal = await finance.saveGoal({ name: "Travel", target: 50_000 });
+    await finance.contribute({ goalId: goal.id, amount: 10_000, date: today() });
+    const exported = await finance.exportBackup();
+    expect(JSON.parse(exported).version).toBe(2);
+    await finance.savePreferences({ ...defaultPreferences, theme: "dark" });
+    const preview = await finance.previewImport(exported);
+    expect(preview.conflicts.map(row => row.collection)).toEqual(["preferences"]);
+    await expect(finance.commitImport(preview, {})).rejects.toThrow("every conflict");
+    await finance.commitImport(preview, { [preview.conflicts[0].key]: "current" });
+    expect((await finance.getSnapshot()).preferences[0].theme).toBe("dark");
+    const again = await finance.previewImport(exported);
+    await finance.commitImport(again, { [again.conflicts[0].key]: "incoming" });
+    expect((await finance.getSnapshot()).preferences[0].theme).toBe("system");
+    expect((await finance.getSnapshot()).contributions[0].amount).toBe(10_000);
+  });
+
+  it("requires choices for changed contributions and rejects savings changes after a preview", async () => {
+    await account();
+    const goal = await finance.saveGoal({ name: "Travel", target: 50_000 });
+    await finance.contribute({ goalId: goal.id, amount: 10_000, date: today() });
+    const changed = JSON.parse(await finance.exportBackup());
+    changed.data.contributions[0].amount = 15_000;
+    const preview = await finance.previewImport(JSON.stringify(changed));
+    expect(preview.conflicts.map(row => row.collection)).toEqual(["contributions"]);
+    await finance.saveGoal({ ...goal, name: "New name" });
+    await expect(finance.commitImport(preview, { [preview.conflicts[0].key]: "incoming" })).rejects.toThrow("changed after");
+    const retry = await finance.previewImport(JSON.stringify(changed));
+    await finance.commitImport(retry, Object.fromEntries(retry.conflicts.map(row => [row.key, "incoming"])));
+    expect((await finance.getSnapshot()).contributions[0].amount).toBe(15_000);
+  });
+
+  it("rejects orphan contributions, excessive release histories, and denomination mismatch", async () => {
+    await account();
+    const goal = await finance.saveGoal({ name: "Travel", target: 50_000 });
+    await finance.contribute({ goalId: goal.id, amount: 10_000, date: today() });
+    const source = JSON.parse(await finance.exportBackup());
+    const before = await finance.getSnapshot();
+    const orphan = structuredClone(source); orphan.data.goals = [];
+    await expect(finance.previewImport(JSON.stringify(orphan))).rejects.toThrow("missing goal");
+    const release = structuredClone(source); release.data.contributions[0].amount = -1;
+    await expect(finance.previewImport(JSON.stringify(release))).rejects.toThrow("releases");
+    const usd = structuredClone(source); usd.currency = "USD"; usd.data.preferences[0].currency = "USD";
+    await expect(finance.previewImport(JSON.stringify(usd))).rejects.toThrow("different currency");
+    expect(await finance.getSnapshot()).toEqual(before);
+  });
+
+  it("does not relabel an empty USD ledger when importing v1 peso records", async () => {
+    await finance.savePreferences({ ...defaultPreferences, currency: "USD" });
+    const incoming = await finance.getSnapshot();
+    incoming.accounts.push({ id: "cash", name: "Peso cash", type: "cash", openingBalance: 100_000, archived: false });
+    await expect(finance.previewImport(backup(incoming))).rejects.toThrow("Version-one backups use PHP");
+    expect((await finance.getSnapshot()).accounts).toEqual([]);
+  });
+
+  it("rejects future contributions through backup parsing and forged previews without changing records", async () => {
+    await account();
+    const goal = await finance.saveGoal({ name: "Travel", target: 50_000 });
+    await finance.contribute({ goalId: goal.id, amount: 10_000, date: today() });
+    const before = await finance.getSnapshot();
+    const source = JSON.parse(await finance.exportBackup());
+    const futureRelease = { id: "future-release", goalId: goal.id, amount: -10_000, date: "9999-01-01" };
+    source.data.contributions.push(futureRelease);
+    await expect(finance.previewImport(JSON.stringify(source))).rejects.toThrow("future");
+    const validPreview = await finance.previewImport(await finance.exportBackup());
+    validPreview.incoming.contributions!.push(futureRelease);
+    await expect(finance.commitImport(validPreview, {})).rejects.toThrow("future");
+    await expect(finance.deleteGoal(goal.id)).rejects.toThrow("Release");
     expect(await finance.getSnapshot()).toEqual(before);
   });
 });

@@ -1,4 +1,8 @@
-import type { Account, Bill, Occurrence, Transaction } from "./types";
+import type { Account, Bill, Currency, Occurrence, Preferences, Transaction } from "./types";
+
+export const defaultPreferences: Preferences = {
+  id: "preferences", name: "", currency: "PHP", theme: "system", alerts: true,
+};
 
 export function parseMoney(text: string, allowNegative = false): number {
   const value = text.trim();
@@ -9,7 +13,7 @@ export function parseMoney(text: string, allowNegative = false): number {
     )
   ) {
     throw new Error(
-      "Enter a valid peso amount with at most two decimal places.",
+      "Enter a valid amount with at most two decimal places.",
     );
   }
   const negative = value.startsWith("-");
@@ -22,11 +26,11 @@ export function parseMoney(text: string, allowNegative = false): number {
   return negative ? -centavos : centavos;
 }
 
-export function money(amount: number): string {
+export function money(amount: number, currency: Currency = "PHP"): string {
   const centavos = BigInt(amount < 0 ? -amount : amount);
   const formatted = new Intl.NumberFormat("en-PH", {
     style: "currency",
-    currency: "PHP",
+    currency,
   })
     .formatToParts(centavos / 100n)
     .map((part) =>

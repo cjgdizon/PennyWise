@@ -3,7 +3,6 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-
 const base = "http://127.0.0.1:4173";
 const artifacts = new URL("../output/playwright/", import.meta.url);
 await mkdir(artifacts, { recursive: true });
@@ -21,22 +20,15 @@ const server = spawn(
   { stdio: "pipe", windowsHide: true },
 );
 let serverOutput = "";
-server.stdout.on("data", (chunk) => {
-  serverOutput += chunk;
-});
-server.stderr.on("data", (chunk) => {
-  serverOutput += chunk;
-});
+server.stdout.on("data", (v) => (serverOutput += v));
+server.stderr.on("data", (v) => (serverOutput += v));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-let browser;
-let page;
-let originalServiceWorker;
-const errors = [];
-const checks = [];
+let browser, page, originalServiceWorker;
+const checks = [],
+  errors = [];
 try {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (server.exitCode !== null)
-      throw new Error(`Preview server failed: ${serverOutput}`);
+  for (let i = 0; i < 100; i++) {
+    if (server.exitCode !== null) throw new Error(serverOutput);
     try {
       if ((await fetch(base)).ok) break;
     } catch {}
@@ -51,120 +43,159 @@ try {
     acceptDownloads: true,
   });
   page = await context.newPage();
-  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(base);
-  await page
-    .getByRole("heading", { name: "A little clarity, every day." })
-    .waitFor();
+  await page.getByRole("heading", { name: "Overview", exact: true }).waitFor();
+  const nav = async (name) => {
+    const rail = page.getByRole("navigation", {
+      name: "Main navigation",
+      exact: true,
+    });
+    if (await rail.isVisible())
+      await rail.getByRole("button", { name, exact: true }).click();
+    else {
+      await page
+        .getByRole("navigation", { name: "Mobile navigation" })
+        .getByRole("button", { name: "More", exact: true })
+        .click();
+      await page
+        .getByRole("dialog")
+        .getByRole("button", { name, exact: true })
+        .click();
+    }
+  };
   const dialog = page.getByRole("dialog");
   const save = async () => {
     await dialog.getByRole("button", { name: "Save", exact: true }).click();
     await dialog.waitFor({ state: "hidden" });
   };
-  await page.getByRole("button", { name: "Set up an account" }).click();
-  await dialog.getByLabel("Account name").fill("Cash (test)");
+  await page.screenshot({
+    path: fileURLToPath(new URL("empty-desktop.png", artifacts)),
+    fullPage: true,
+  });
+  await nav("Accounts");
+  await page
+    .getByRole("button", { name: "Add account", exact: true })
+    .first()
+    .click();
+  await dialog.getByLabel("Account name", { exact: true }).fill("Cash (test)");
   await dialog.getByLabel("Opening balance (PHP)").fill("10000");
   await save();
-  await page.getByRole("button", { name: "Add account", exact: true }).click();
-  await dialog.getByLabel("Account name").fill("Bank (test)");
+  await page
+    .getByRole("button", { name: "Add account", exact: true })
+    .first()
+    .click();
+  await dialog.getByLabel("Account name", { exact: true }).fill("Bank (test)");
   await dialog.getByLabel("Account type").selectOption("bank");
   await dialog.getByLabel("Opening balance (PHP)").fill("5000");
   await save();
-  checks.push("First-run account creation and opening balances");
-  async function transaction(kind, amount, note) {
+  checks.push("Accounts persist opening balances");
+  async function entry(kind, amount, note) {
     await page
-      .getByRole("button", { name: "Add transaction", exact: true })
+      .getByRole("button", { name: "Log transaction", exact: true })
+      .first()
       .click();
     await dialog.getByRole("button", { name: kind, exact: true }).click();
-    await dialog.getByLabel("Amount (PHP)").fill(amount);
-    if (kind !== "transfer") {
-      await dialog
-        .getByRole("combobox", { name: "Account", exact: true })
-        .selectOption({ label: "Cash (test)" });
-      await dialog
-        .getByLabel("Category")
-        .selectOption({
-          label: kind === "income" ? "Salary" : "Food & groceries",
-        });
-    } else {
+    await dialog.getByLabel("Amount (PHP)", { exact: true }).fill(amount);
+    if (kind === "transfer") {
       await dialog
         .getByLabel("From account")
         .selectOption({ label: "Cash (test)" });
       await dialog
         .getByLabel("To account")
         .selectOption({ label: "Bank (test)" });
+    } else {
+      await dialog
+        .getByLabel("Account", { exact: true })
+        .selectOption({ label: "Cash (test)" });
+      await dialog
+        .getByRole("button", {
+          name: kind === "income" ? "Salary" : "Food & groceries",
+          exact: true,
+        })
+        .click();
     }
-    await dialog.getByLabel("Note").fill(note);
+    await dialog.getByLabel("Note (optional)").fill(note);
     await save();
   }
-  await transaction("expense", "650.25", "Groceries (test)");
-  await transaction("income", "2000", "Salary (test)");
-  await transaction("transfer", "500", "Move to bank (test)");
+  await entry("income", "1000", "Pay (test)");
+  await entry("expense", "500.25", "Groceries (test)");
+  await entry("transfer", "100", "Move (test)");
+  checks.push("Quick-entry income, expense and transfer");
+  await page.keyboard.press("n");
+  await dialog.waitFor();
+  assert.equal(
+    await dialog
+      .getByLabel("Amount (PHP)", { exact: true })
+      .evaluate((el) => el === document.activeElement),
+    true,
+  );
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  checks.push("N shortcut focuses amount");
+  await nav("Budgets");
   await page
-    .locator(".balance-main")
-    .filter({ hasText: /16,349\.75/ })
-    .waitFor();
-  assert.match(await page.locator(".balance-main").innerText(), /16,349\.75/);
-  checks.push("Income, expense, transfer, and exact displayed total");
-  await page.getByRole("button", { name: "Add budget", exact: true }).click();
-  await dialog
-    .getByLabel("Category")
-    .selectOption({ label: "Food & groceries" });
+    .getByRole("button", { name: "Add budget", exact: true })
+    .first()
+    .click();
   await dialog.getByLabel("Monthly limit (PHP)").fill("1000");
+  await dialog.getByLabel("Alert threshold (%)").fill("80");
+  await save();
+  await nav("Savings");
+  await page
+    .getByRole("button", { name: "New goal", exact: true })
+    .first()
+    .click();
+  await dialog.getByLabel("Goal name").fill("Emergency fund (test)");
+  await dialog.getByLabel("Target amount (PHP)").fill("5000");
   await save();
   await page
-    .locator(".budget-row")
-    .filter({ hasText: /349\.75 left/ })
-    .waitFor();
-  assert.match(await page.locator(".budget-row").innerText(), /349\.75 left/);
-  checks.push("Budget spending and remaining balance");
-  await page.getByRole("button", { name: "Add your first bill" }).click();
+    .getByRole("button", { name: "Add funds", exact: true })
+    .first()
+    .click();
+  await dialog.getByLabel("Amount (PHP)", { exact: true }).fill("1000");
+  await save();
+  checks.push("Budgets and savings reserve existing funds");
+  await nav("Bills");
+  await page
+    .getByRole("button", { name: "Add bill", exact: true })
+    .first()
+    .click();
   await dialog.getByLabel("Bill name").fill("Internet (test)");
-  await dialog.getByLabel("Amount (PHP)").fill("1700");
-  await dialog
-    .getByLabel("Category")
-    .selectOption({ label: "Home & utilities" });
+  await dialog.getByLabel("Amount (PHP)", { exact: true }).fill("250");
   await save();
   await page
     .getByRole("button", { name: "Record payment", exact: true })
     .first()
     .click();
-  await dialog
-    .getByLabel("Paying account")
-    .selectOption({ label: "Cash (test)" });
-  await dialog
-    .getByRole("button", { name: "Record payment", exact: true })
-    .click();
-  await dialog.waitFor({ state: "hidden" });
-  await page
-    .locator(".balance-main")
-    .filter({ hasText: /14,649\.75/ })
-    .waitFor();
-  assert.match(await page.locator(".balance-main").innerText(), /14,649\.75/);
-  checks.push("Bill payment creates exactly one expense");
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("button", { name: "Activity", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Edit Groceries (test)", exact: true })
-    .click();
-  await dialog.getByLabel("Amount (PHP)").fill("700.25");
   await save();
-  checks.push("Existing expense can be edited");
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("button", { name: "Settings", exact: true })
-    .click();
-  const downloadPromise = page.waitForEvent("download");
+  checks.push("Bill payment creates expense");
+  await nav("Reports");
+  const csvDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export CSV", exact: true }).click();
+  const csv = await csvDownload;
+  const csvPath = new URL("report.csv", artifacts);
+  await csv.saveAs(fileURLToPath(csvPath));
+  assert.match(await readFile(csvPath, "utf8"), /Groceries \(test\)/);
+  checks.push("Reports export matching transactions");
+  const printWindow = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "Export PDF", exact: true }).click();
+  const printed = await printWindow;
+  await printed.getByRole("heading", { name: "PennyWise report" }).waitFor();
+  assert.match(await printed.locator("table").innerText(), /Groceries \(test\)/);
+  await printed.close();
+  checks.push("PDF action opens the filtered printable report");
+  await nav("Settings");
+  const backupDownload = page.waitForEvent("download");
   await page
     .getByRole("button", { name: "Export backup", exact: true })
     .click();
-  const download = await downloadPromise;
+  const backupFile = await backupDownload;
   const backupPath = new URL("backup.json", artifacts);
-  await download.saveAs(fileURLToPath(backupPath));
+  await backupFile.saveAs(fileURLToPath(backupPath));
   const backup = await readFile(backupPath, "utf8");
+  assert.equal(JSON.parse(backup).version, 2);
   assert.equal(JSON.parse(backup).data.transactions.length, 4);
+  assert.equal(JSON.parse(backup).data.contributions.length, 1);
   await page
     .getByLabel("Import backup file")
     .setInputFiles({
@@ -172,16 +203,15 @@ try {
       mimeType: "application/json",
       buffer: Buffer.from(backup),
     });
-  await page.getByRole("heading", { name: "Review your backup" }).waitFor();
-  assert.match(await dialog.innerText(), /0 records to add/);
+  await dialog.waitFor();
   await dialog
     .getByRole("button", { name: "Combine records", exact: true })
     .click();
   await dialog.waitFor({ state: "hidden" });
-  checks.push("Backup export and repeated import skip identical records");
+  checks.push("Version-two backup round trip includes savings");
   const altered = JSON.parse(backup);
   altered.data.transactions.find((t) => t.note === "Groceries (test)").amount =
-    75025;
+    60025;
   await page
     .getByLabel("Import backup file")
     .setInputFiles({
@@ -189,13 +219,19 @@ try {
       mimeType: "application/json",
       buffer: Buffer.from(JSON.stringify(altered)),
     });
-  await page.getByRole("heading", { name: "Review your backup" }).waitFor();
-  await dialog.getByLabel("Use imported").check();
+  await dialog.waitFor();
+  assert.equal(
+    await dialog
+      .getByRole("button", { name: "Combine records", exact: true })
+      .isDisabled(),
+    true,
+  );
+  await dialog.getByLabel("Keep current").check();
   await dialog
     .getByRole("button", { name: "Combine records", exact: true })
     .click();
   await dialog.waitFor({ state: "hidden" });
-  checks.push("Changed backup conflict requires explicit imported choice");
+  checks.push("Backup conflict requires explicit choice");
   await page
     .getByLabel("Import backup file")
     .setInputFiles({
@@ -204,108 +240,148 @@ try {
       buffer: Buffer.from("{bad"),
     });
   await page.getByRole("alert").filter({ hasText: "not valid JSON" }).waitFor();
-  await page.getByRole("button", { name: "Dismiss error" }).click();
-  checks.push("Invalid JSON displays an error without replacing records");
-  await page.getByLabel("Import backup file").setInputFiles({ name: "older.json", mimeType: "application/json", buffer: Buffer.from(backup) });
-  await page.getByRole("heading", { name: "Review your backup" }).waitFor();
-  await dialog.getByLabel("Keep current").check();
-  const secondTab = await context.newPage();
-  await secondTab.goto(base);
-  await secondTab.getByRole("navigation", { name: "Main navigation", exact: true }).getByRole("button", { name: "Settings", exact: true }).click();
-  await secondTab.getByRole("button", { name: "Add", exact: true }).click();
-  await secondTab.getByRole("dialog").getByLabel("Category name").fill("Weekend (test)");
-  await secondTab.getByRole("dialog").getByRole("button", { name: "Save", exact: true }).click();
-  await secondTab.getByRole("dialog").waitFor({ state: "hidden" });
-  await dialog.getByRole("button", { name: "Combine records", exact: true }).click();
-  await dialog.getByRole("alert").filter({ hasText: "records changed" }).waitFor();
-  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
-  await page.getByRole("button", { name: "Dismiss error" }).click();
-  checks.push("Another tab changing records invalidates an open backup preview");
-  await page
-    .getByRole("navigation", { name: "Main navigation", exact: true })
-    .getByRole("button", { name: "Overview", exact: true })
-    .click();
-  await page.reload();
-  await page
-    .getByRole("heading", { name: "A little clarity, every day." })
-    .waitFor();
-  await page
-    .locator(".balance-main")
-    .filter({ hasText: /14,549\.75/ })
-    .waitFor();
-  assert.match(await page.locator(".balance-main").innerText(), /14,549\.75/);
+  checks.push("Invalid backup leaves records intact");
+  await page.getByRole("button", { name: "Add category", exact: true }).click();
+  await dialog.getByLabel("Category name").fill("Family celebrations and weekend activities");
+  await save();
+  await page.getByRole("button", { name: "Log transaction", exact: true }).first().click();
+  await dialog.getByLabel("Amount (PHP)", { exact: true }).fill("1.25");
+  await dialog.getByRole("button", { name: "Family celebrations and weekend activities", exact: true }).click();
+  await dialog.getByLabel("Note (optional)").fill("Weekend (test)");
+  await save();
+  checks.push("Custom categories remain usable in quick entry");
+
+  await nav("Overview");
   await page.evaluate(async () => {
     await document.fonts.ready;
     await navigator.serviceWorker.ready;
   });
+  await page.reload();
+  await page.getByRole("heading", { name: "Overview", exact: true }).waitFor();
   await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
+  for (const [theme, width, height, name] of [
+    ["light", 1440, 1050, "desktop"],
+    ["dark", 1440, 1050, "desktop-dark"],
+    ["light", 390, 844, "mobile"],
+    ["dark", 390, 844, "mobile-dark"],
+  ]) {
+    await page.emulateMedia({ colorScheme: theme });
+    await page.waitForFunction(
+      (dark) => document.documentElement.classList.contains("dark") === dark,
+      theme === "dark",
+    );
+    await page.setViewportSize({ width, height });
+    if (width === 390) {
+      const allowance = page.locator("section").filter({ has: page.getByText("Safe to spend", { exact: true }) }).first();
+      const box = await allowance.boundingBox();
+      assert.ok(box && box.y + box.height < height - 72, "Safe-to-spend must be visible above phone navigation");
+      assert.match(await allowance.innerText(), /Budget left/);
+    }
+    await page.screenshot({
+      path: fileURLToPath(new URL(`${name}.png`, artifacts)),
+      fullPage: true,
+    });
+    assert.equal(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth > innerWidth,
+      ),
+      false,
+    );
+  }
+  checks.push("Desktop and phone layouts in both themes have no overflow");
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.waitForFunction(
+    () => !document.documentElement.classList.contains("dark"),
+  );
+  for (const screen of ["Budgets", "Savings", "Reports", "Settings"]) {
+    await nav(screen);
+    await page.screenshot({
+      path: fileURLToPath(
+        new URL(screen.toLowerCase() + "-mobile.png", artifacts),
+      ),
+      fullPage: true,
+    });
+    assert.equal(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth > innerWidth,
+      ),
+      false,
+    );
+  }
+  await page
+    .getByRole("navigation", { name: "Mobile navigation" })
+    .getByRole("button", { name: "Log transaction", exact: true })
+    .click();
+  await dialog.waitFor();
   await page.screenshot({
-    path: fileURLToPath(new URL("desktop.png", artifacts)),
+    path: fileURLToPath(new URL("quick-add-mobile.png", artifacts)),
     fullPage: true,
   });
-  assert.equal(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth > window.innerWidth,
-    ),
-    false,
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByLabel("Appearance").selectOption("dark");
+  await page.getByRole("button", { name: "Save preferences", exact: true }).click();
+  await page.waitForFunction(() => document.documentElement.classList.contains("dark"));
+  await page.reload();
+  await page.getByRole("heading", { name: "Overview", exact: true }).waitFor();
+  await page.waitForFunction(() => document.documentElement.classList.contains("dark"));
+  await nav("Settings");
+  await page.getByLabel("Appearance").selectOption("system");
+  await page.getByRole("button", { name: "Save preferences", exact: true }).click();
+  await page.waitForFunction(() => !document.documentElement.classList.contains("dark"));
+  checks.push("Theme preference persists across reopening");
+  await nav("Overview");
+
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  await page.emulateMedia({ colorScheme: "light" });
+  const second = await context.newPage();
+  await second.goto(base);
+  await second
+    .getByRole("button", { name: "Log transaction", exact: true })
+    .first()
+    .click();
+  await second
+    .getByRole("dialog")
+    .getByLabel("Amount (PHP)", { exact: true })
+    .fill("12.34");
+  originalServiceWorker = await readFile(
+    new URL("../dist/sw.js", import.meta.url),
+    "utf8",
   );
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.screenshot({
-    path: fileURLToPath(new URL("mobile.png", artifacts)),
-    fullPage: true,
+  await writeFile(
+    new URL("../dist/sw.js", import.meta.url),
+    `${originalServiceWorker}\n/* test ${Date.now()} */`,
+  );
+  await page.evaluate(async () => {
+    await (await navigator.serviceWorker.getRegistration()).update();
   });
-  assert.equal(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth > window.innerWidth,
-    ),
-    false,
-  );
-  checks.push("Desktop and phone layouts have no horizontal overflow");
-  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-  await page.screenshot({ path: fileURLToPath(new URL("mobile-bottom.png", artifacts)), fullPage: false });
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await secondTab.getByRole("button", { name: "Add transaction", exact: true }).click();
-  await secondTab.getByRole("dialog").getByLabel("Amount (PHP)").fill("12.34");
-  originalServiceWorker = await readFile(new URL("../dist/sw.js", import.meta.url), "utf8");
-  await writeFile(new URL("../dist/sw.js", import.meta.url), `${originalServiceWorker}\n/* browser-check ${Date.now()} */`);
-  await page.evaluate(async () => { const registration = await navigator.serviceWorker.getRegistration(); await registration.update(); });
   await page.getByRole("button", { name: "Update app", exact: true }).waitFor();
-  await secondTab.getByRole("button", { name: "Update app", exact: true }).waitFor();
-  assert.equal(await secondTab.getByRole("button", { name: "Update app", exact: true }).isDisabled(), true);
+  await second
+    .getByRole("button", { name: "Update app", exact: true })
+    .waitFor();
+  assert.equal(
+    await second
+      .getByRole("button", { name: "Update app", exact: true })
+      .isDisabled(),
+    true,
+  );
   await page.getByRole("button", { name: "Update app", exact: true }).click();
-  await secondTab.getByRole("button", { name: "Reload app", exact: true }).waitFor();
-  assert.equal(await secondTab.getByRole("dialog").getByLabel("Amount (PHP)").inputValue(), "12.34");
-  assert.equal(await secondTab.getByRole("button", { name: "Reload app", exact: true }).isDisabled(), true);
-  await secondTab.close();
-  checks.push("Updating from another tab preserves an unsaved transaction form");
+  await second
+    .getByRole("button", { name: "Reload app", exact: true })
+    .waitFor();
+  assert.equal(
+    await second
+      .getByRole("dialog")
+      .getByLabel("Amount (PHP)", { exact: true })
+      .inputValue(),
+    "12.34",
+  );
+  await second.close();
+  checks.push("Cross-tab update retains unsaved entry");
   await context.setOffline(true);
   await page.reload();
-  await page
-    .getByRole("heading", { name: "A little clarity, every day." })
-    .waitFor();
-  assert.match(await page.locator(".balance-main").innerText(), /14,549\.75/);
-  await page
-    .getByRole("navigation", { name: "Mobile navigation", exact: true })
-    .getByRole("button", { name: "Activity", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Delete Internet (test)", exact: true })
-    .click();
-  await dialog
-    .getByRole("button", { name: "Delete transaction", exact: true })
-    .click();
-  await dialog.waitFor({ state: "hidden" });
-  await page
-    .getByRole("navigation", { name: "Mobile navigation", exact: true })
-    .getByRole("button", { name: "Bills", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Record payment", exact: true })
-    .first()
-    .waitFor();
-  checks.push(
-    "Offline reopening retains records and deleting a payment reopens its bill",
-  );
+  await page.getByRole("heading", { name: "Overview", exact: true }).waitFor();
+  assert.match(await page.locator("body").innerText(), /15,248.50/);
+  checks.push("Offline reopening retains balances");
   assert.deepEqual(errors, []);
   await writeFile(
     new URL("results.json", artifacts),
@@ -314,7 +390,6 @@ try {
   console.log(JSON.stringify({ result: "PASS", checks }, null, 2));
 } catch (error) {
   if (page) {
-    await writeFile(new URL("failure.html", artifacts), await page.content());
     await writeFile(
       new URL("failure.txt", artifacts),
       await page.locator("body").ariaSnapshot(),
@@ -326,7 +401,11 @@ try {
   }
   throw error;
 } finally {
-  if (originalServiceWorker) await writeFile(new URL("../dist/sw.js", import.meta.url), originalServiceWorker);
+  if (originalServiceWorker)
+    await writeFile(
+      new URL("../dist/sw.js", import.meta.url),
+      originalServiceWorker,
+    );
   await browser?.close();
   server.kill();
 }

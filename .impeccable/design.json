@@ -1,7 +1,47 @@
 {
   "mode": "operate",
-  "colors": { "background": "#f9f7f7", "panel": "#ffffff", "tint": "#dbe2ef", "primary": "#3f72af", "navy": "#112d4e", "text": "#112d4e", "muted": "#4e6380", "border": "#dbe2ef" },
-  "typography": { "body": "DM Sans", "sectionHeading": "DM Sans", "displayHeading": "DM Sans" },
+  "colors": {
+    "light": {
+      "canvas": "#f8fafc",
+      "panel": "#ffffff",
+      "text": "#0f172a",
+      "muted": "#536176",
+      "border": "#e2e8f0",
+      "hover": "#f1f5f9"
+    },
+    "dark": {
+      "canvas": "#09090b",
+      "panel": "#18181b",
+      "text": "#f4f4f5",
+      "muted": "#a1a1aa",
+      "border": "#343439",
+      "hover": "#27272a"
+    },
+    "focus": "#059669",
+    "selection": "#a7f3d0",
+    "semantic": {
+      "healthy": "#10b981",
+      "approaching": "#f59e0b",
+      "exceeded": "#f43f5e"
+    }
+  },
+  "typography": {
+    "body": "Inter Variable",
+    "numeric": "JetBrains Mono Variable",
+    "numericVariant": "tabular-nums"
+  },
+  "styling": "Tailwind CSS utilities",
   "spacingBase": 4,
-  "radius": { "panel": 14, "balance": 13, "note": 12, "primaryButton": 8, "input": 6 }
+  "layout": {
+    "desktop": "collapsible left navigation and workspace",
+    "phone": "two-column KPIs and bottom navigation with central add action",
+    "entry": "desktop drawer and full-height phone sheet"
+  },
+  "verification": {
+    "tests": 45,
+    "browserChecks": 15,
+    "pageErrors": 0,
+    "finishVerdict": "ship (scoped screenshot confirmation)",
+    "redesignDeployed": false
+  }
 }

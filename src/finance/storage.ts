@@ -4,10 +4,15 @@ import type {
   Bill,
   Budget,
   Category,
+  CompleteSnapshot,
+  Contribution,
+  Goal,
+  Preferences,
   Snapshot,
   Transaction,
 } from "./types";
-import { collections, equalRecords, type FinancialRecord } from "./validation";
+import { collections, equalRecords, recordRows, type FinancialRecord } from "./validation";
+import { defaultPreferences } from "./rules";
 
 type StoredTransaction = Transaction & { occurrenceKey?: string };
 type Meta = { key: string; value: number };
@@ -20,12 +25,27 @@ database.version(1).stores({
   bills: "id",
   meta: "key",
 });
+database.version(2).stores({
+  goals: "id",
+  contributions: "id, goalId, date",
+  preferences: "id",
+}).upgrade(async transaction => {
+  await transaction.table<Budget>("budgets").toCollection().modify(budget => {
+    budget.alertThreshold ??= 80;
+  });
+  await transaction.table("preferences").put({ ...defaultPreferences });
+  const previous = await transaction.table<Meta>("meta").get("revision");
+  await transaction.table("meta").put({ key: "revision", value: (previous?.value ?? 0) + 1 });
+});
 
 const accounts = database.table<Account, string>("accounts");
 const categories = database.table<Category, string>("categories");
 const transactions = database.table<StoredTransaction, string>("transactions");
 const budgets = database.table<Budget, string>("budgets");
 const bills = database.table<Bill, string>("bills");
+const goals = database.table<Goal, string>("goals");
+const contributions = database.table<Contribution, string>("contributions");
+const preferences = database.table<Preferences, string>("preferences");
 const meta = database.table<Meta, string>("meta");
 export const allTables = [
   accounts,
@@ -33,6 +53,9 @@ export const allTables = [
   transactions,
   budgets,
   bills,
+  goals,
+  contributions,
+  preferences,
   meta,
 ];
 
@@ -41,14 +64,23 @@ database.on("versionchange", () => {
   if (typeof window !== "undefined")
     window.dispatchEvent(new Event("pennywise-database-updated"));
 });
+database.on("ready", () => {
+  // Dexie maps each declared schema version to ten native IndexedDB versions.
+  if (database.backendDB().version > 20) {
+    throw new Error("This database was upgraded by a newer PennyWise app. Reload the latest app before opening your records.");
+  }
+}, true);
 
-export async function readSnapshot(): Promise<Snapshot> {
+export async function readSnapshot(): Promise<CompleteSnapshot> {
   const [
     accountRows,
     categoryRows,
     transactionRows,
     budgetRows,
     billRows,
+    goalRows,
+    contributionRows,
+    preferenceRows,
     revision,
   ] = await Promise.all([
     accounts.toArray(),
@@ -56,6 +88,9 @@ export async function readSnapshot(): Promise<Snapshot> {
     transactions.toArray(),
     budgets.toArray(),
     bills.toArray(),
+    goals.toArray(),
+    contributions.toArray(),
+    preferences.toArray(),
     meta.get("revision"),
   ]);
   return {
@@ -66,6 +101,9 @@ export async function readSnapshot(): Promise<Snapshot> {
     ),
     budgets: budgetRows,
     bills: billRows,
+    goals: goalRows,
+    contributions: contributionRows,
+    preferences: preferenceRows,
     revision: revision?.value ?? 0,
   };
 }
@@ -81,10 +119,10 @@ export async function persistSnapshot(
       string
     >(collection);
     const previous = new Map<string, FinancialRecord>(
-      before[collection].map((record) => [record.id, record]),
+      recordRows(before, collection).map((record) => [record.id, record]),
     );
     const next = new Map<string, FinancialRecord>(
-      after[collection].map((record) => [record.id, record]),
+      recordRows(after, collection).map((record) => [record.id, record]),
     );
     const removed = [...previous.keys()].filter(
       (recordId) => !next.has(recordId),
@@ -113,6 +151,6 @@ export async function persistSnapshot(
   return changed;
 }
 
-export function consistentSnapshot(): Promise<Snapshot> {
+export function consistentSnapshot(): Promise<CompleteSnapshot> {
   return database.transaction("r", allTables, readSnapshot);
 }

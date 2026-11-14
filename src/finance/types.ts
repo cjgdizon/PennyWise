@@ -29,6 +29,17 @@ export type Budget = {
   month: string;
   categoryId: string;
   amount: number;
+  alertThreshold?: number;
+};
+export type Currency = "PHP" | "USD";
+export type Goal = { id: string; name: string; target: number };
+export type Contribution = { id: string; goalId: string; amount: number; date: string };
+export type Preferences = {
+  id: "preferences";
+  name: string;
+  currency: Currency;
+  theme: "light" | "dark" | "system";
+  alerts: boolean;
 };
 export type Bill = {
   id: string;
@@ -46,7 +57,15 @@ export type Snapshot = {
   transactions: Transaction[];
   budgets: Budget[];
   bills: Bill[];
+  goals?: Goal[];
+  contributions?: Contribution[];
+  preferences?: Preferences[];
   revision: number;
+};
+export type CompleteSnapshot = Snapshot & {
+  goals: Goal[];
+  contributions: Contribution[];
+  preferences: Preferences[];
 };
 export type Occurrence = {
   bill: Bill;
@@ -55,12 +74,12 @@ export type Occurrence = {
   transactionId?: string;
 };
 export type Collection =
-  "accounts" | "categories" | "transactions" | "budgets" | "bills";
+  "accounts" | "categories" | "transactions" | "budgets" | "bills" | "goals" | "contributions" | "preferences";
 export type Conflict = {
   key: string;
   collection: Collection;
-  current: Account | Category | Transaction | Budget | Bill;
-  incoming: Account | Category | Transaction | Budget | Bill;
+  current: Account | Category | Transaction | Budget | Bill | Goal | Contribution | Preferences;
+  incoming: Account | Category | Transaction | Budget | Bill | Goal | Contribution | Preferences;
 };
 export type ImportPreview = {
   revision: number;
@@ -68,6 +87,8 @@ export type ImportPreview = {
   conflicts: Conflict[];
   added: number;
   skipped: number;
+  currency?: Currency;
+  version?: 1 | 2;
 };
 export type ConflictChoices = Record<string, "current" | "incoming">;
 export type TransactionInput = Transaction extends infer T

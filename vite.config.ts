@@ -1,10 +1,12 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 export default defineConfig({
   plugins: [
     react(),
+    tailwindcss(),
     VitePWA({
       registerType: "prompt",
       includeAssets: ["icon.svg", "apple-touch-icon.png"],
@@ -12,8 +14,8 @@ export default defineConfig({
         name: "PennyWise",
         short_name: "PennyWise",
         description: "Your daily money companion",
-        theme_color: "#112d4e",
-        background_color: "#f9f7f7",
+        theme_color: "#047857",
+        background_color: "#f8fafc",
         display: "standalone",
         start_url: "/",
         scope: "/",
